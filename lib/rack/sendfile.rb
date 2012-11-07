@@ -97,9 +97,12 @@ module Rack
   class Sendfile
     F = ::File
 
-    def initialize(app, variation=nil)
+    def initialize(app, variation=nil, mappings={})
       @app = app
       @variation = variation
+      @mappings = mappings.map do |internal, external|
+        [/^#{internal}/i, external]
+      end
     end
 
     def call(env)
@@ -109,10 +112,11 @@ module Rack
         when 'X-Accel-Redirect'
           path = F.expand_path(body.to_path)
           if url = map_accel_path(env, path)
+            headers['Content-Length'] = '0'
             headers[type] = url
             body = []
           else
-            env['rack.errors'] << "X-Accel-Mapping header missing"
+            env['rack.errors'].puts "X-Accel-Mapping header missing"
           end
         when 'X-Sendfile', 'X-Lighttpd-Send-File'
           path = F.expand_path(body.to_path)
@@ -121,24 +125,26 @@ module Rack
           body = []
         when '', nil
         else
-          env['rack.errors'] << "Unknown x-sendfile variation: '#{variation}'.\n"
+          env['rack.errors'].puts "Unknown x-sendfile variation: '#{variation}'.\n"
         end
       end
       [status, headers, body]
     end
 
     private
-      def variation(env)
-        @variation ||
-          env['sendfile.type'] ||
-          env['HTTP_X_SENDFILE_TYPE']
-      end
+    def variation(env)
+      @variation ||
+        env['sendfile.type'] ||
+        env['HTTP_X_SENDFILE_TYPE']
+    end
 
-      def map_accel_path(env, file)
-        if mapping = env['HTTP_X_ACCEL_MAPPING']
-          internal, external = mapping.split('=', 2).map{ |p| p.strip }
-          file.sub(/^#{internal}/i, external)
-        end
+    def map_accel_path(env, path)
+      if mapping = @mappings.detect { |internal,_| internal =~ path }
+        path.sub(*mapping)
+      elsif mapping = env['HTTP_X_ACCEL_MAPPING']
+        internal, external = mapping.split('=', 2).map{ |p| p.strip }
+        path.sub(/^#{internal}/i, external)
       end
+    end
   end
 end
